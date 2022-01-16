@@ -1,0 +1,3 @@
+[submodule "litlib"]
+	path = litlib
+	url = git@github.com:mooss/litlib.git

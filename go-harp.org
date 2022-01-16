@@ -1,0 +1,457 @@
+#+title: GoHarp, Harp implementation in Go
+#+author: Félix Jamet
+
+#+property: header-args :noweb yes :results output
+#+property: header-args:go+ :main no
+
+* Prelude
+
+** References
+
+Peter Norvig's Lispy[fn:: See https://norvig.com/lispy.html.] is the main inspiration for this attempt at writing an interpreter, because I find it very high level, informative, pleasant to read and easy to follow.
+I have borrowed some terminology and examples from it.
+
+
+** Inclusion
+
+LitLib's =include.pl= provides the inclusion and dependency resolution functionalities that bind together the code blocks scattered throughout this document.
+
+#+name: include
+#+begin_src bash :var code_blocks="" :wrap src go
+./litlib/include.pl go.org ":noweb $code_blocks"
+#+end_src
+
+
+** Go utils :noexport:
+
+This section provides callable code blocks providing various Go related functionalities.
+
+*** Ensure Go is available in the =$PATH=
+
+Using the official go installation instruction, =go= and =gofmt= are located under =/usr/local/go/bin=, which must therefore be added to the =$PATH=.
+
+#+name: PATHgo
+#+begin_src bash
+PATH="$PATH:/usr/local/go/bin"
+#+end_src
+
+*** Go doc
+
+This code block can be used to query Go's documentation.
+
+#+name: go-doc
+#+begin_src bash :var package_and_args=""
+<<PATHgo>>
+go doc $package_and_args 2>&1 || echo "No doc for \`$package_and_args\`."
+#+end_src
+
+*** =gofmt= diff
+
+Shows the diff of a code block with the output of =gofmt=, this allows to easily see what is expected by =gofmt=.
+
+#+name: gofmt-diff
+#+begin_src bash :var codeblock="" args="" :wrap src diff
+tangled=$(./litlib/include.pl go.org ":noweb $codeblock :exit-with-error")
+if [ $? -ne 0 ]; then
+    echo "$tangled"
+    exit 0
+fi
+<<PATHgo>>
+gofmt -d <(echo -e "package dummy\n"; echo "$tangled") $args 2>&1 || echo "-gofmt failed."
+#+end_src
+
+
+When taking the ill-formated code block below as reference,
+#+name: gofmt-diff-example
+#+begin_src go
+func badlyFormated(source string) int {
+	result := (len(source)*2)+1
+	return  result
+}
+#+end_src
+
+=gofmt-diff= can highlight the formatting errors:
+#+Call: gofmt-diff("gofmt-diff-example")
+
+#+RESULTS:
+#+begin_src diff
+diff -u /dev/fd/63.orig /dev/fd/63
+--- /dev/fd/63.orig	2022-01-16 18:05:28.527962295 +0100
++++ /dev/fd/63	2022-01-16 18:05:28.527962295 +0100
+@@ -1,6 +1,6 @@
+ package dummy
+ 
+ func badlyFormated(source string) int {
+-	result := (len(source)*2)+1
+-	return  result
++	result := (len(source) * 2) + 1
++	return result
+ }
+#+end_src
+
+
+* Tokenization
+
+Tokenization's role is to break a Harp source code into its tokens, i.e. substrings representing the individual components of the program.
+
+** =Token=
+
+Tokens are stored in the =Token= type:
+#+begin_src go :noweb-ref Token
+type Token struct {
+	string
+	category TokenCategory
+}
+#+end_src
+
+*** =TokenCategory=
+
+Tokenization is kept rather simple, with only a handful of different categories of tokens allowed:
+#+begin_src go :noweb-ref Token
+type TokenCategory int
+
+const (
+	ErrorToken      TokenCategory = iota // Avoid accidental construction of empty tokens.
+	StringToken                          // "a double quoted string"
+	OpenParenToken                       // (
+	CloseParenToken                      // )
+	PlainToken                           // Any other valid token.
+	EndOfSource                          // No more tokens (not an error).
+)
+#+end_src
+
+The =TokenCategory= defined above illustrate the syntactic simplicity of Harp, with only 4 categories of valid tokens, 3 if you consider parens to be of the same category (they are only distinct because it was easy to do so).
+
+Plain tokens are any valid token that is not a paren or a string, they will later be semantically separated into symbols, numbers and errors during the parsing phase.
+Strings are syntactically distinct from plain tokens because they must be terminated by a non-escaped double quote, whereas plain tokens can be terminated by a closing paren or any whitespace rune.
+
+In the semantically nonsensical but syntactically correct Harp program below, all the valid token categories are present.
+#+begin_src scheme :eval never
+(category (string "a \"double quoted\" string")
+          (plain 23 any-other-valid-token))
+#+end_src
+
+Beyond the obvious parens, we have:
+ - ="a \"double quoted\" string"= as a string token[fn::Note the spaces and the escaped double quotes.] and
+ - =category=, =string=, =plain=, =23=, =any-other-valid-token= as plain tokens.
+
+*** Plain token predicate
+
+This predicate determines which runes can go in a plain token.
+I choose to make it quite restrictive so that interesting runes line =[]{}= can be used in a future implementation for other purposes.
+At worst it's easy to enlarge the definition by altering the predicate.
+
+#+name: isPlainTokenRune
+#+begin_src go
+// isPlainTokenRune test for characters that can go anywhere in a plain Token.
+func isPlainTokenRune(r rune) bool {
+	return (r >= 42 && r <= 57) || (r >= 65 && r <= 90) || (r >= 97 && r <= 122)
+}
+#+end_src
+
+Usage and list of runes conforming to the predicate:
+#+begin_src go :results output :exports both :wrap example
+package main
+
+import(
+	"fmt"
+)
+
+<<include("isPlainTokenRune")>>
+
+func main() {
+	for r := rune(0); r < 127; r++ {
+		if isPlainTokenRune(r) {
+			fmt.Print(string(r))
+		}
+	}
+	fmt.Println()
+}
+#+end_src
+
+#+RESULTS:
+#+begin_example
+,*+,-./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
+#+end_example
+
+My best attempt at a simple sentence describing this set of runes is the following: "ASCII letters, digits or one of *+,-./".
+
+*** Rune verification
+
+The rune verification functions centralize two aspects:
+ 1. Validation of the pertinent predicate.
+ 2. Production of the appropriate error message.
+Doing those two things at the same place makes them less likely to drift apart from one another.
+
+#+name: verifyPlainTokenStart
+#+begin_src go
+// verifyPlainTokenStart returns an error if its argument is not a valid first rune for a plain token.
+func verifyPlainTokenStart(start rune) error {
+	if isPlainTokenRune(start) || start == '\'' { // Quoting is allowed.
+		return nil
+	}
+	template := "invalid start of token `%v`, expected a plain token rune (ASCII letters, digits or one of *+,-./) or a single quote"
+	return errors.New(fmt.Sprintf(template, string(start)))
+}
+#+end_src
+#+depends:verifyPlainTokenStart :go unicode errors fmt :noweb isPlainTokenRune
+
+#+name: verifyPlainTokenContent
+#+begin_src go
+// verifyPlainTokenContent returns an error if its argument is not a valid rune for a plain token.
+func verifyPlainTokenContent(content rune) error {
+	if isPlainTokenRune(content) {
+		return nil
+	}
+	template := "invalid token content `%v`, expected a plain token rune (ASCII letters, digits or one of *+,-./)"
+	return errors.New(fmt.Sprintf(template, string(content)))
+}
+#+end_src
+#+depends:verifyPlainTokenContent :go unicode errors fmt :noweb isPlainTokenRune
+
+
+** =tokenizer=
+
+The =tokenizer= type represents a step in the tokenization process, with =start= pointing at the first rune of the token being processed and =end= pointing after its last rune.
+I call =start= and =end= pointers because they are indeed pointing at a slice within =source=, even though they are not technically pointers.
+What is between =start= and =end= is called the current token.
+
+#+begin_src go :noweb-ref tokenizer
+type tokenizer struct {
+	source     string
+	start, end int
+}
+#+end_src
+#+depends:tokenizer :go errors unicode unicode/utf8 :noweb Token verifyPlainTokenStart verifyPlainTokenContent
+
+=tokenizer= is built around the invariant src_go[]{start == end},
+special care has been taken to maintain it in all its exported functions.
+It means that, as long as only the exported functions are used, =tokenizer= is never in an intermediate state where it is in the middle of producing a token, which could result in incorrect tokens.
+
+The next subsections will present in a bottom-up manner the functions build around =tokenizer=, starting with =tokenizer= construction, then iteration primitives, then multiple-rune iteration and finally to the end goal of =tokenizer=, token production.
+
+*** Construction
+
+The first step is of course to start at the very first character of the source.
+
+#+begin_src go :noweb-ref tokenizer
+func NewTokenizer(source string) tokenizer {
+	return tokenizer{source, 0, 0}
+}
+#+end_src
+
+The invariant is maintained by =NewTokenizer= because, well, src_go[]{0 == 0}.
+
+*** Iteration primitives
+
+Iteration is not done via a ranged for loop, but rather via a test of whether the iteration is =Over=, and a method moving to the =nextRune=.
+This is done because the tokenization process is not strictly linear, hence the need to =backtrack=.
+It also allows to perform iteration within functions that can be nested as needed, which is not possible with a for loop.
+
+#+begin_src go :noweb-ref tokenizer
+// Over returns true if the tokenization has reached the end of the source code.
+func (tok tokenizer) Over() bool {
+	return tok.end >= len(tok.source)
+}
+
+// nextRune advances to the next rune and returns it along with its size.
+func (tok *tokenizer) nextRune() (rune, int) {
+	r, size := utf8.DecodeRuneInString(tok.source[tok.end:])
+	tok.end += size
+	return r, size
+}
+
+// backtrack rewinds the end pointer, thus reversing the actions of nextRune.
+func (tok *tokenizer) backtrack(s int) {
+	tok.end -= s
+}
+#+end_src
+
+The invariant is maintained by =Over= because its =tokenizer= is not modified.
+
+*** Multiple-rune iteration
+
+The =skip*= and =leap*= methods move forward in the source code several runes at a time, the difference between the two is in what they are moving.
+=skip*= move both the start and the end to the same point whereas =leap*= moves only the end.
+Thus after a =skip*=, the current token is the empty string, whereas after a =leap*=, the current token is longer than or equal to what it was before.
+
+Outside of strings, sequences of whitespace are used to separates tokens, the exact composition of a whitespace sequence does not change its meaning, hence this function to skip them:
+#+begin_src go :noweb-ref tokenizer
+// skipWhitespace makes the tokenizer point to the next non-whitespace character.
+func (tok *tokenizer) skipWhitespace() {
+	defer func() { tok.start = tok.end }()
+	for leap, r := range tok.source[tok.end:] {
+		if !unicode.IsSpace(r) {
+			tok.end += leap
+			return
+		}
+	}
+	tok.end = len(tok.source)
+}
+#+end_src
+
+The =leapToEndOf*= functions are defining two crucial things:
+ 1. Which runes can terminate a token category.
+ 2. Which runes are valid in a token category.
+
+For plain tokens, termination is a space or a closing paren and =verifyPlainTokenContent= handles character validity:
+#+begin_src go :noweb-ref tokenizer
+func (tok *tokenizer) leapToEndOfPlainToken() error {
+	for !tok.Over() {
+		r, s := tok.nextRune() // (
+		if unicode.IsSpace(r) || r == ')' {
+			tok.backtrack(s) // r is not a part of plain token.
+			break
+		}
+		if err := verifyPlainTokenContent(r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+#+end_src
+
+For strings, termination is a non-escaped double quote and all non-empty characters are valid:
+#+begin_src go :noweb-ref tokenizer
+func (tok *tokenizer) leapToEndOfString() error {
+	escaped := false
+	for !tok.Over() {
+		r, _ := tok.nextRune()
+		switch {
+		case r == '"' && !escaped: // "
+			return nil
+		case r == '\\':
+			escaped = !escaped // Covers both escaping anything and a backslash being escaped.
+		default:
+			if escaped {
+				escaped = false
+			}
+		}
+	}
+	return errors.New("unterminated string literal")
+}
+#+end_src
+
+*** Token production
+
+This minor utility makes it more readable and less error-prone to get the current token:
+#+begin_src go :noweb-ref tokenizer
+func (tok tokenizer) currentToken() string {
+	return tok.source[tok.start:tok.end]
+}
+#+end_src
+
+=NextToken= fullfils the purpose of =tokenizer=, it produces the next token and move the =start= and =end= pointers after it.
+#+begin_src go :noweb-ref tokenizer
+func (tok *tokenizer) NextToken() (Token, error) {
+	defer func() { tok.start = tok.end }()
+
+	tok.skipWhitespace()
+	if tok.Over() {
+		return Token{"", EndOfSource}, nil
+	}
+
+	r, _ := tok.nextRune()
+	switch r {
+	case '(':
+		return Token{tok.currentToken(), OpenParenToken}, nil
+
+	case ')':
+		return Token{tok.currentToken(), CloseParenToken}, nil
+
+	case '"': // "
+		if err := tok.leapToEndOfString(); err != nil {
+			return Token{tok.currentToken(), ErrorToken}, err
+		}
+		return Token{tok.currentToken(), StringToken}, nil
+
+	default:
+		if err := verifyPlainTokenStart(r); err != nil {
+			return Token{tok.currentToken(), ErrorToken}, err
+		}
+		if err := tok.leapToEndOfPlainToken(); err != nil {
+			return Token{tok.currentToken(), ErrorToken}, err
+		}
+		return Token{tok.currentToken(), PlainToken}, nil
+	}
+}
+#+end_src
+
+The invariant is maintained by =NextToken= thanks to the =defer= statement at the top.
+
+
+** =Tokenize=
+
+This exported function assembles all the tokens into an easy to consume array, thus making =tokenizer= an implementation detail.
+At first I thought about using a channel like a Python-style generator but I eventually realised that this was not as practical as generators are in Python and, for this use case, not better than just cramming all tokens into an array.
+
+Note that by construction, only valid token types are returned, =ErrorToken= and =EndOfSource= cannot be emitted by =Tokenize=.
+
+#+name: Tokenize
+#+begin_src go
+func Tokenize(source string) ([]Token, error) {
+	tokz := NewTokenizer(source)
+	result := []Token{}
+	for !tokz.Over() {
+		token, err := tokz.NextToken()
+		if err == nil && token.category == ErrorToken {
+			err = errors.New("unknown tokenization error")
+		}
+		if err != nil {
+			return nil, fmt.Errorf("Tokenization error: %v.", err)
+		}
+		if token.category == EndOfSource {
+			break
+		}
+		result = append(result, token)
+	}
+	return result, nil
+}
+#+end_src
+#+depends:Tokenize :noweb Token tokenizer :go fmt errors
+
+Usage:
+#+begin_src go :results output :wrap src default :exports both
+package main
+
+<<include("Tokenize :go strings fmt")>>
+
+func decomposeTokens(source string) {
+	tokens, err := Tokenize(source)
+	fmt.Println()
+	if err != nil {
+		fmt.Printf("Failed to tokenize `%s` ; %s\n", source, err.Error())
+		return
+	}
+	buffer := []string{}
+	for _, l := range tokens {
+		buffer = append(buffer, fmt.Sprintf("`%v`", l.string))
+	}
+	fmt.Println(strings.Join(buffer, ", "))
+}
+
+func main() {
+	example := "(category (string \"a \\\"double quoted\\\" string\")\n          (plain 23 any-other-valid-token))"
+	fmt.Println("Example source is:")
+	fmt.Println(example)
+	decomposeTokens(example)
+	decomposeTokens(fmt.Sprintf("[%s]", example))
+	decomposeTokens(fmt.Sprintf("%s#", example))
+}
+#+end_src
+
+#+RESULTS:
+#+begin_src default
+Example source is:
+(category (string "a \"double quoted\" string")
+          (plain 23 any-other-valid-token))
+
+`(`, `category`, `(`, `string`, `"a \"double quoted\" string"`, `)`, `(`, `plain`, `23`, `any-other-valid-token`, `)`, `)`
+
+Failed to tokenize `[(category (string "a \"double quoted\" string")
+          (plain 23 any-other-valid-token))]` ; Tokenization error: invalid start of token `[`, expected a plain token rune (ASCII letters, digits or one of *+,-./) or a single quote.
+
+Failed to tokenize `(category (string "a \"double quoted\" string")
+          (plain 23 any-other-valid-token))#` ; Tokenization error: invalid start of token `#`, expected a plain token rune (ASCII letters, digits or one of *+,-./) or a single quote.
+#+end_src
+
