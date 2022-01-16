@@ -111,19 +111,18 @@ Tokenization is kept rather simple, with only a handful of different categories 
 type TokenCategory int
 
 const (
-	ErrorToken      TokenCategory = iota // Avoid accidental construction of empty tokens.
-	StringToken                          // "a double quoted string"
-	OpenParenToken                       // (
-	CloseParenToken                      // )
-	PlainToken                           // Any other valid token.
-	EndOfSource                          // No more tokens (not an error).
+	ErrorToken  TokenCategory = iota // Avoid accidental construction of empty tokens.
+	BalexpToken                      // Balanced expression delimiters, like parens.
+	StringToken                      // "a double quoted string"
+	PlainToken                       // Any other valid token.
+	EndOfSource                      // No more tokens (not an error).
 )
 #+end_src
 
-The =TokenCategory= defined above illustrate the syntactic simplicity of Harp, with only 4 categories of valid tokens, 3 if you consider parens to be of the same category (they are only distinct because it was easy to do so).
-
-Plain tokens are any valid token that is not a paren or a string, they will later be semantically separated into symbols, numbers and errors during the parsing phase.
-Strings are syntactically distinct from plain tokens because they must be terminated by a non-escaped double quote, whereas plain tokens can be terminated by a closing paren or any whitespace rune.
+The =TokenCategory= defined above illustrate the syntactic simplicity of Harp, with only 3 categories of valid tokens:
+ - Balexp (for balanced expression) tokens are pairs of runes delimiting an expression, one opening it and the other closing it.
+ - Strings are enclosed within a pair of non-escaped double quotes and can contain whitespace.
+ - Plain tokens are any valid token that is neither a balexp nor a string, they will later be semantically separated into symbols, numbers and errors during the parsing phase.
 
 In the semantically nonsensical but syntactically correct Harp program below, all the valid token categories are present.
 #+begin_src scheme :eval never
@@ -131,19 +130,20 @@ In the semantically nonsensical but syntactically correct Harp program below, al
           (plain 23 any-other-valid-token))
 #+end_src
 
-Beyond the obvious parens, we have:
- - ="a \"double quoted\" string"= as a string token[fn::Note the spaces and the escaped double quotes.] and
- - =category=, =string=, =plain=, =23=, =any-other-valid-token= as plain tokens.
+Regrouped by category, we have:
+ - =(=, =)= as balanced expressions delimiters,
+ - =category=, =string=, =plain=, =23=, =any-other-valid-token= as plain tokens and
+ - ="a \"double quoted\" string"= as a string token[fn::Note the spaces and the escaped double quotes.].
 
 *** Plain token predicate
 
 This predicate determines which runes can go in a plain token.
-I choose to make it quite restrictive so that interesting runes line =[]{}= can be used in a future implementation for other purposes.
+I choose to make it quite restrictive so that interesting runes like =[]{}#= can be used in a future implementation for other purposes.
 At worst it's easy to enlarge the definition by altering the predicate.
 
 #+name: isPlainTokenRune
 #+begin_src go
-// isPlainTokenRune test for characters that can go anywhere in a plain Token.
+// isPlainTokenRune test for characters that can go anywhere in a plain token.
 func isPlainTokenRune(r rune) bool {
 	return (r >= 42 && r <= 57) || (r >= 65 && r <= 90) || (r >= 97 && r <= 122)
 }
@@ -353,11 +353,8 @@ func (tok *tokenizer) NextToken() (Token, error) {
 
 	r, _ := tok.nextRune()
 	switch r {
-	case '(':
-		return Token{tok.currentToken(), OpenParenToken}, nil
-
-	case ')':
-		return Token{tok.currentToken(), CloseParenToken}, nil
+	case '(', ')':
+		return Token{tok.currentToken(), BalexpToken}, nil
 
 	case '"': // "
 		if err := tok.leapToEndOfString(); err != nil {
