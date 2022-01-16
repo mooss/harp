@@ -18,7 +18,7 @@ LitLib's =include.pl= provides the inclusion and dependency resolution functiona
 
 #+name: include
 #+begin_src bash :var code_blocks="" :wrap src go
-./litlib/include.pl go.org ":noweb $code_blocks"
+./litlib/include.pl go-harp.org ":noweb $code_blocks"
 #+end_src
 
 
