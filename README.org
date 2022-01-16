@@ -1,0 +1,22 @@
+#+title: Harp, Homoiconic array-represented programming (language)
+#+author: Félix Jamet
+
+* What ?
+
+A Lisp-inspired programming language using arrays as the primary data structure instead of lists.
+
+Its other characteristic is to be implemented in a literate programming style, using Emacs's Org Mode.
+
+* Why ?
+
+To waste everybody's time with yet another Lisp.
+More seriously, to have some fun, to learn about Lisp and to answer the question "what are the implications of an array-based Lisp ?".
+
+The motivation comes partly from https://justine.lol/sectorlisp2/, a post about SectorLISP stating that:
+#+begin_quote
+Fast immediate garbage collection with zero memory overhead and perfect heap defragmentation is as easy as ABC when your language guarantees data structures are acyclic.
+#+end_quote
+
+This looks like a very interesting property.
+My intuition is that replacing lists with arrays and using a different set of primitives could be another way to ensure acyclic data structures.
+I don't know whether those principles make any sense but it will at least be subjectively interesting.
