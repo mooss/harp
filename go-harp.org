@@ -191,7 +191,7 @@ func verifyPlainTokenStart(start rune) error {
 		return nil
 	}
 	template := "invalid start of token `%v`, expected a plain token rune (ASCII letters, digits or one of *+,-./) or a single quote"
-	return errors.New(fmt.Sprintf(template, string(start)))
+	return fmt.Errorf(template, string(start))
 }
 #+end_src
 #+depends:verifyPlainTokenStart :go unicode errors fmt :noweb isPlainTokenRune
@@ -204,7 +204,7 @@ func verifyPlainTokenContent(content rune) error {
 		return nil
 	}
 	template := "invalid token content `%v`, expected a plain token rune (ASCII letters, digits or one of *+,-./)"
-	return errors.New(fmt.Sprintf(template, string(content)))
+	return fmt.Errorf(template, string(content))
 }
 #+end_src
 #+depends:verifyPlainTokenContent :go unicode errors fmt :noweb isPlainTokenRune
