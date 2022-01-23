@@ -245,13 +245,13 @@ The invariant is maintained by =NewTokenizer= because, well, src_go[]{0 == 0}.
 
 *** Iteration primitives
 
-Iteration is not done via a ranged for loop, but rather via a test of whether the iteration is =Over=, and a method moving to the =nextRune=.
-This is done because the tokenization process is not strictly linear, hence the need to =backtrack=.
+Iteration is done through a method moving to the =nextRune= and by checking whether all runes are =Spent=.
+This technique is used instead of a ranged for loop because of the need to =backtrack= since the tokenization process is not strictly linear.
 It also allows to perform iteration within functions that can be nested as needed, which is not possible with a for loop.
 
 #+begin_src go :noweb-ref tokenizer
-// Over returns true if the tokenization has reached the end of the source code.
-func (tok tokenizer) Over() bool {
+// Spent returns true if the tokenization has reached the end of the source code.
+func (tok tokenizer) Spent() bool {
 	return tok.end >= len(tok.source)
 }
 
@@ -268,7 +268,7 @@ func (tok *tokenizer) backtrack(s int) {
 }
 #+end_src
 
-The invariant is maintained by =Over= because its =tokenizer= is not modified.
+The invariant is maintained by =Spent= because its =tokenizer= is not modified.
 
 *** Multiple-rune iteration
 
@@ -298,7 +298,7 @@ The =leapToEndOf*= functions are defining two crucial things:
 For plain tokens, termination is a space or a closing paren and =verifyPlainTokenContent= handles character validity:
 #+begin_src go :noweb-ref tokenizer
 func (tok *tokenizer) leapToEndOfPlainToken() error {
-	for !tok.Over() {
+	for !tok.Spent() {
 		r, s := tok.nextRune() // (
 		if unicode.IsSpace(r) || r == ')' {
 			tok.backtrack(s) // r is not a part of plain token.
@@ -316,7 +316,7 @@ For strings, termination is a non-escaped double quote and all non-empty charact
 #+begin_src go :noweb-ref tokenizer
 func (tok *tokenizer) leapToEndOfString() error {
 	escaped := false
-	for !tok.Over() {
+	for !tok.Spent() {
 		r, _ := tok.nextRune()
 		switch {
 		case r == '"' && !escaped: // "
@@ -348,7 +348,7 @@ func (tok *tokenizer) NextToken() (Token, error) {
 	defer func() { tok.start = tok.end }()
 
 	tok.skipWhitespace()
-	if tok.Over() {
+	if tok.Spent() {
 		return Token{"", EndOfSource}, nil
 	}
 
@@ -390,7 +390,7 @@ Note that by construction, only valid token types are returned, =ErrorToken= and
 func Tokenize(source string) ([]Token, error) {
 	tokz := NewTokenizer(source)
 	result := []Token{}
-	for !tokz.Over() {
+	for !tokz.Spent() {
 		token, err := tokz.NextToken()
 		if err == nil && token.category == ErrorToken {
 			err = errors.New("unknown tokenization error")
