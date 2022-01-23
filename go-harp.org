@@ -380,11 +380,8 @@ The invariant is maintained by =NextToken= thanks to the =defer= statement at th
 
 ** =Tokenize= function
 
-This exported function assembles all the tokens into an easy to consume array, thus making =tokenizer= an implementation detail.
-At first I thought about using a channel like a Python-style generator but I eventually realised that this was not as practical as generators are in Python and, for this use case, not better than just cramming all tokens into an array.
-
-Note that by construction, only valid token types are returned, =ErrorToken= and =EndOfSource= cannot be emitted by =Tokenize=.
-
+This exported function assembles all the tokens into an easy to consume array.
+It is used for illustration and testing purposes since some features might need to tweak the tokenization rules.
 #+name: Tokenize
 #+begin_src go
 func Tokenize(source string) ([]Token, error) {
@@ -407,6 +404,8 @@ func Tokenize(source string) ([]Token, error) {
 }
 #+end_src
 #+depends:Tokenize :noweb Token tokenizer :go fmt errors
+
+By construction, only valid token types are returned, =ErrorToken= and =EndOfSource= cannot be emitted by =Tokenize=.
 
 Usage:
 #+begin_src go :results output :wrap src default :exports both
@@ -472,9 +471,8 @@ type String struct{ val string }
 type Symbol struct{ val string }
 #+end_src
 
-Since the premise of Harp is to use arrays instead of lists, a Harp AST is represented with slices, Go's name for dynamic arrays.
-
-Those elements can be accumulated inside a H-array (=Harray=):
+Since the premise of Harp is to use arrays instead of lists, the node type of Harp's abstract syntax tree is represented with slices, Go's name for dynamic arrays.
+This node type is called an H-array (=Harray=), the name is meant to reflect the fact that it stores Harp's AST and that it can be used as a general purpose array:
 
 #+name: Harray
 #+begin_src go
@@ -483,7 +481,7 @@ type Harray struct {
 }
 #+end_src
 
-Note that Harray does not store values of type =Element= but rather of type =Expression=, something that can be either an element or an H-array.
+Note that =Harray= does not store values of type =Element= but rather of type =Expression=, something that can be either an element or an H-array.
 This way, a H-array can truly encode the hierarchical nature of an AST.
 
 #+depends:harp-expression :noweb harp-elements Harray
@@ -493,27 +491,29 @@ The =Expression= type is an interface that will be defined when pertinent, becau
 
 ** Parser primitives
 
-A =parser= is represented as an array of not-yet-parsed tokens:
+A =parser= is built on top of a =tokenizer=:
 #+begin_src go :noweb-ref parser
 type parser struct {
-	tokens []Token
+	tok tokenizer
 }
 #+end_src
-#+depends:parser :noweb harp-elements :go fmt unicode strconv
+#+depends:parser :noweb tokenizer harp-elements :go fmt unicode strconv
 
-This array shrinks every time a token is consumed:
+Iteration on tokens is naturally relegated to =tokenizer='s own functions:
 #+begin_src go :noweb-ref parser
-func (p *parser) consumeToken() Token {
-	result := p.tokens[0]
-	p.tokens = p.tokens[1:]
-	return result
+func (p *parser) NextToken() (Token, error) {
+	return p.tok.NextToken()
+}
+
+func (p parser) Spent() bool {
+	return p.tok.Spent()
 }
 #+end_src
 
-Consuming a token should only be done after this predicate has been verified:
+Construction is straightforward:
 #+begin_src go :noweb-ref parser
-func (p parser) tokensRemain() bool {
-	return len(p.tokens) > 0
+func ParserFromTokenizer(tok tokenizer) parser {
+	return parser{tok}
 }
 #+end_src
 
@@ -599,7 +599,8 @@ if err != nil {
 return Int{value}, nil
 #+end_src
 
-*** Parse balanced expression
+
+** Parse balanced expression
 
 The only balanced expression supported is a H-array, specified between pairs of matching parens.
 #+name: Parse balanced expression
@@ -622,8 +623,11 @@ Their hierarchical nature comes from the fact that those expressions can themsel
 #+name: Construct H-array
 #+begin_src go
 harray := Harray{}
-for p.tokensRemain() {
-	nestedToken := p.consumeToken() // (
+for !p.Spent() {
+	nestedToken, err := p.NextToken()
+	if err != nil {
+		return nil, err
+	} // (
 	if len(nestedToken.string) == 1 && nestedToken.string[0] == ')' {
 		return harray, nil
 	}
@@ -644,13 +648,16 @@ return nil, fmt.Errorf("unbalanced expression, found unmatched `%s`", token.stri
 #+end_src
 
 
-** Parse the next expression
+** Parse the next H-array
 
 Where =makeExpression= can return any type of expression, =NextHarray= can only return an H-array
 #+name: NextHarray
 #+begin_src go :noweb-ref parser
 func (p *parser) NextHarray() (Harray, error) {
-	token := p.consumeToken()
+	token, err := p.NextToken()
+	if err != nil {
+		return Harray{}, err
+	}
 	expr, err := p.makeExpression(token)
 	if err != nil {
 		return Harray{}, err
@@ -670,30 +677,30 @@ The caller is responsible for ensuring that at least one token remains.
 
 ** Parse functions
 
-This final section defines parse functions constructing an AST from a sequence of tokens and from a raw string.
+This final section defines parse functions constructing an AST from a tokenizer and from a raw source code.
 A simple AST printer is also defined as a way to illustrate the AST constructed by those functions.
 
-*** =ParseTokens=
+*** =ParseTokenizer=
 
-=ParseTokens= tries to spend all its token into a valid H-array.
+=ParseTokenizer= tries to spend a tokenizer into a valid H-array.
 
-#+name: ParseTokens
+#+name: ParseTokenizer
 #+begin_src go
-func ParseTokens(tokens []Token) (Harray, error) {
-	p := parser{tokens}
-	if !p.tokensRemain() {
+func ParseTokenizer(tok tokenizer) (Harray, error) {
+	p := ParserFromTokenizer(tok)
+	if p.Spent() {
 		return Harray{}, fmt.Errorf("no token to parse")
 	}
 	result, err := p.NextHarray()
 	if err != nil {
 		return Harray{}, err
 	}
-	if !p.tokensRemain() {
+	if p.Spent() {
 		return result, nil
 	}
 
 	result = Harray{[]Expression{Symbol{"begin"}, result}}
-	for p.tokensRemain() {
+	for !p.Spent() {
 		nested, err := p.NextHarray()
 		if err != nil {
 			return Harray{}, err
@@ -703,18 +710,29 @@ func ParseTokens(tokens []Token) (Harray, error) {
 	return result, nil
 }
 #+end_src
-#+depends:ParseTokens :noweb Token harp-expression parser :go fmt
+#+depends:ParseTokenizer :noweb tokenizer harp-expression parser :go fmt
 
 When multiple H-arrays are present, they are regrouped under a =begin= statement, thus the following code is valid:
 #+begin_src scheme
 (define x 4)
 (define y 8.)
 #+end_src
-It will be implicitely transformed by =ParseTokens= into:
+It will be implicitely transformed by =ParseTokenizer= into:
 #+begin_src scheme
 (begin (define x 4)
        (define y 8.))
 #+end_src
+
+*** =ParseSource=
+
+There is not much to do but to rely =ParseTokenizer=:
+#+name: ParseSource
+#+begin_src go
+func ParseSource(source string) (Harray, error) {
+	return ParseTokenizer(NewTokenizer(source))
+}
+#+end_src
+#+depends:ParseSource :noweb ParseTokenizer
 
 *** =PrintAST=
 
@@ -767,77 +785,14 @@ func PrintAST(ast Harray) {
 #+end_src
 #+depends:PrintAST :noweb harp-expression :go strings fmt reflect
 
-*** =ParseTokens= illustration
+*** =ParseSource= and =PrintAST= usage
+
+=PrintAST= can be used in conjunction with =ParseSource= to get a pretty good illustration of the structure produced by the parsing process:
 
 #+begin_src go :results output :exports both :wrap example
 package main
 
-<<include(":noweb Token ParseTokens PrintAST :go fmt")>>
-
-type Expression interface{} // Must be defined.
-
-func main() {
-	tokens := []Token{
-		{"(", BalexpToken}, {"define", PlainToken}, {"x", PlainToken}, {"4", PlainToken}, {")", BalexpToken},
-		{"(", BalexpToken}, {"define", PlainToken}, {"y", PlainToken}, {"8.", PlainToken}, {")", BalexpToken},
-	}
-	fmt.Println("Raw tokens:")
-	fmt.Println(tokens)
-
-	ast, err := ParseTokens(tokens)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	fmt.Println("\nRaw AST:")
-	fmt.Println(ast)
-	fmt.Println("\nFormatted AST:")
-	PrintAST(ast)
-}
-#+end_src
-
-#+RESULTS:
-#+begin_example
-Raw tokens:
-[{( 1} {define 3} {x 3} {4 3} {) 1} {( 1} {define 3} {y 3} {8. 3} {) 1}]
-
-Raw AST:
-{[{begin} {[{define} {x} {4}]} {[{define} {y} {8}]}]}
-
-Formatted AST:
-(Symbol{begin}
- (Symbol{define}
-  Symbol{x}
-  Int{4})
- (Symbol{define}
-  Symbol{y}
-  Float{8}))
-#+end_example
-
-The result is basically a less readable version of the source program with type annotations.
-We can also witness the wrapping of each H-array into a =begin= expression.
-
-*** =ParseString=
-
-There is not much to do but to rely on =Tokenize= and =ParseTokens=:
-#+name: ParseString
-#+begin_src go
-func ParseString(source string) (Harray, error) {
-	tokens, err := Tokenize(source)
-	if err != nil {
-		return Harray{}, err
-	}
-
-	return ParseTokens(tokens)
-}
-#+end_src
-#+depends:ParseString :noweb Tokenize ParseTokens
-
-Usage:
-#+begin_src go :results output :exports both :wrap example
-package main
-
-<<include(":noweb ParseString PrintAST :go fmt")>>
+<<include(":noweb ParseSource PrintAST :go fmt")>>
 
 type Expression interface{} // Must be defined.
 
@@ -845,7 +800,7 @@ func example(program string) {
 	fmt.Println("Program:")
 	fmt.Println(program)
 	fmt.Println()
-	ast, err := ParseString(program)
+	ast, err := ParseSource(program)
 	if err != nil {
 		fmt.Println("Parsing error:", err.Error() + ".")
 		return
@@ -912,3 +867,6 @@ Formatted AST:
   Symbol{sentence}
   String{Aurë entuluva}))
 #+end_example
+
+The formatted AST is basically a less readable version of the source program with type annotations.
+We can also witness the wrapping of multiple H-arrays into one =begin= expression, where applicable.
