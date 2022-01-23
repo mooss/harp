@@ -25,6 +25,7 @@ LitLib's =include.pl= provides the inclusion and dependency resolution functiona
 ** Go utils :noexport:
 
 This section provides callable code blocks providing various Go related functionalities.
+They are only used for development purposes.
 
 *** Ensure Go is available in the =$PATH=
 
@@ -51,7 +52,7 @@ Shows the diff of a code block with the output of =gofmt=, this allows to easily
 
 #+name: gofmt-diff
 #+begin_src bash :var codeblock="" args="" :wrap src diff
-tangled=$(./litlib/include.pl go.org ":noweb $codeblock :exit-with-error")
+tangled=$(./litlib/include.pl go-harp.org ":noweb $codeblock :exit-with-error")
 if [ $? -ne 0 ]; then
     echo "$tangled"
     exit 0
@@ -194,7 +195,7 @@ func verifyPlainTokenStart(start rune) error {
 	return fmt.Errorf(template, string(start))
 }
 #+end_src
-#+depends:verifyPlainTokenStart :go unicode errors fmt :noweb isPlainTokenRune
+#+depends:verifyPlainTokenStart :noweb isPlainTokenRune :go unicode errors fmt
 
 #+name: verifyPlainTokenContent
 #+begin_src go
@@ -207,7 +208,7 @@ func verifyPlainTokenContent(content rune) error {
 	return fmt.Errorf(template, string(content))
 }
 #+end_src
-#+depends:verifyPlainTokenContent :go unicode errors fmt :noweb isPlainTokenRune
+#+depends:verifyPlainTokenContent :noweb isPlainTokenRune :go unicode errors fmt
 
 
 ** =tokenizer=
@@ -222,7 +223,7 @@ type tokenizer struct {
 	start, end int
 }
 #+end_src
-#+depends:tokenizer :go errors unicode unicode/utf8 :noweb Token verifyPlainTokenStart verifyPlainTokenContent
+#+depends:tokenizer :noweb Token verifyPlainTokenStart verifyPlainTokenContent :go errors unicode unicode/utf8
 
 =tokenizer= is built around the invariant src_go[]{start == end},
 special care has been taken to maintain it in all its exported functions.
@@ -377,7 +378,7 @@ func (tok *tokenizer) NextToken() (Token, error) {
 The invariant is maintained by =NextToken= thanks to the =defer= statement at the top.
 
 
-** =Tokenize=
+** =Tokenize= function
 
 This exported function assembles all the tokens into an easy to consume array, thus making =tokenizer= an implementation detail.
 At first I thought about using a channel like a Python-style generator but I eventually realised that this was not as practical as generators are in Python and, for this use case, not better than just cramming all tokens into an array.
