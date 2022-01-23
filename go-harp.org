@@ -136,10 +136,10 @@ Regrouped by category, we have:
  - =category=, =string=, =plain=, =23=, =any-other-valid-token= as plain tokens and
  - ="a \"double quoted\" string"= as a string token[fn::Note the spaces and the escaped double quotes.].
 
-*** Plain token predicate
+*** Plain token rune validation
 
-This predicate determines which runes can go in a plain token.
-I choose to make it quite restrictive so that interesting runes like =[]{}#= can be used in a future implementation for other purposes.
+The predicate below determines which runes can go in a plain token.
+I choose to make it quite restrictive so that interesting runes like =[]{}#= can be used for specific purposes in future evolutions of the language.
 At worst it's easy to enlarge the definition by altering the predicate.
 
 #+name: isPlainTokenRune
@@ -177,26 +177,7 @@ func main() {
 
 My best attempt at a simple sentence describing this set of runes is the following: "ASCII letters, digits or one of *+,-./".
 
-*** Rune verification
-
-The rune verification functions centralize two aspects:
- 1. Validation of the pertinent predicate.
- 2. Production of the appropriate error message.
-Doing those two things at the same place makes them less likely to drift apart from one another.
-
-#+name: verifyPlainTokenStart
-#+begin_src go
-// verifyPlainTokenStart returns an error if its argument is not a valid first rune for a plain token.
-func verifyPlainTokenStart(start rune) error {
-	if isPlainTokenRune(start) || start == '\'' { // Quoting is allowed.
-		return nil
-	}
-	template := "invalid start of token `%v`, expected a plain token rune (ASCII letters, digits or one of *+,-./) or a single quote"
-	return fmt.Errorf(template, string(start))
-}
-#+end_src
-#+depends:verifyPlainTokenStart :noweb isPlainTokenRune :go unicode errors fmt
-
+The verification function below can generate a nice error message for invalid runes:
 #+name: verifyPlainTokenContent
 #+begin_src go
 // verifyPlainTokenContent returns an error if its argument is not a valid rune for a plain token.
@@ -214,7 +195,7 @@ func verifyPlainTokenContent(content rune) error {
 ** =tokenizer=
 
 The =tokenizer= type represents a step in the tokenization process, with =start= pointing at the first rune of the token being processed and =end= pointing after its last rune.
-I call =start= and =end= pointers because they are indeed pointing at a slice within =source=, even though they are not technically pointers.
+=start= and =end= are considered pointers because they are indeed pointing at a slice within =source=, even though they are not technically pointers.
 What is between =start= and =end= is called the current token.
 
 #+begin_src go :noweb-ref tokenizer
@@ -223,7 +204,7 @@ type tokenizer struct {
 	start, end int
 }
 #+end_src
-#+depends:tokenizer :noweb Token verifyPlainTokenStart verifyPlainTokenContent :go errors unicode unicode/utf8
+#+depends:tokenizer :noweb Token verifyPlainTokenContent :go errors unicode unicode/utf8
 
 =tokenizer= is built around the invariant src_go[]{start == end},
 special care has been taken to maintain it in all its exported functions.
@@ -364,7 +345,7 @@ func (tok *tokenizer) NextToken() (Token, error) {
 		return Token{tok.currentToken(), StringToken}, nil
 
 	default:
-		if err := verifyPlainTokenStart(r); err != nil {
+		if err := verifyPlainTokenContent(r); err != nil {
 			return Token{tok.currentToken(), ErrorToken}, err
 		}
 		if err := tok.leapToEndOfPlainToken(); err != nil {
@@ -446,10 +427,10 @@ Example source is:
 `(`, `category`, `(`, `string`, `"a \"double quoted\" string"`, `)`, `(`, `plain`, `23`, `any-other-valid-token`, `)`, `)`
 
 Failed to tokenize `[(category (string "a \"double quoted\" string")
-          (plain 23 any-other-valid-token))]` ; Tokenization error: invalid start of token `[`, expected a plain token rune (ASCII letters, digits or one of *+,-./) or a single quote.
+          (plain 23 any-other-valid-token))]` ; Tokenization error: invalid token content `[`, expected a plain token rune (ASCII letters, digits or one of *+,-./).
 
 Failed to tokenize `(category (string "a \"double quoted\" string")
-          (plain 23 any-other-valid-token))#` ; Tokenization error: invalid start of token `#`, expected a plain token rune (ASCII letters, digits or one of *+,-./) or a single quote.
+          (plain 23 any-other-valid-token))#` ; Tokenization error: invalid token content `#`, expected a plain token rune (ASCII letters, digits or one of *+,-./).
 #+end_src
 
 
