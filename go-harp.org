@@ -2,7 +2,7 @@
 #+author: Félix Jamet
 
 #+property: header-args :noweb yes :results output
-#+property: header-args:go+ :main no
+#+property: header-args:go+ :main no :eval no
 
 * Prelude
 
@@ -151,7 +151,7 @@ func isPlainTokenRune(r rune) bool {
 #+end_src
 
 Usage and list of runes conforming to the predicate:
-#+begin_src go :results output :exports both :wrap example
+#+begin_src go :eval no-export :results output :exports both :wrap example
 package main
 
 import(
@@ -389,7 +389,7 @@ func Tokenize(source string) ([]Token, error) {
 By construction, only valid token types are returned, =ErrorToken= and =EndOfSource= cannot be emitted by =Tokenize=.
 
 Usage:
-#+begin_src go :results output :wrap src default :exports both
+#+begin_src go :eval no-export :results output :wrap src default :exports both
 package main
 
 <<include("Tokenize :go strings fmt")>>
@@ -770,10 +770,10 @@ func PrintAST(ast Harray) {
 
 =PrintAST= can be used in conjunction with =ParseSource= to get a pretty good illustration of the structure produced by the parsing process:
 
-#+begin_src go :results output :exports both :wrap example
+#+begin_src go :eval no-export :results output :exports both :wrap example
 package main
 
-<<include(":noweb ParseSource PrintAST :go fmt")>>
+<<include("ParseSource PrintAST :go fmt")>>
 
 type Expression interface{} // Must be defined.
 
