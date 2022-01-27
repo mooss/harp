@@ -851,3 +851,300 @@ Formatted AST:
 
 The formatted AST is basically a less readable version of the source program with type annotations.
 We can also witness the wrapping of multiple H-arrays into one =begin= expression, where applicable.
+
+
+* Generation of code blocks
+
+This is a code generation system designed to work from within an Org document.
+
+** Presentation of the concepts
+*** Specification, association and substitution
+
+The most fundamental notion of this code generation system is that of generic code specification.
+It takes the form of source code containing variables represented inside sigil-prefixed curly braces, something like =${variable}=.
+The following specification therefore contains the variables _=type=_ and _=fun=_:
+#+name: triple-spec
+#+begin_src go
+func ${type}Triple(n ${type}) ${type} {
+	${fun}(n)
+	return 3 * n
+}
+#+end_src
+
+The notation to associate values to variables is inspired by that of noweb arguments.
+For example, the association _=:type float :fun fmt.Println=_ associates the value _=float=_ to the variable _=type=_ and the value _=fmt.Println=_ to the variable _=fun=_.
+
+The process of replacing variables with their values inside a specification is called substitution.
+Performing substitution with the association _=:type float :fun fmt.Println=_ on the specification shown earlier will result in:
+#+begin_src go
+func floatTriple(n float) float {
+	fmt.Println(n)
+	return 3 * n
+}
+#+end_src
+
+*** Multiple values
+
+For code generation to be really useful, a way to specify multiple values in one go is necessary.
+This is done by using a space separator to give more than one value to a variable.
+When a variable has several values, all possible variable combinations are generated via a cartesian product.
+
+The association _=:type float int :fun fmt.Println=_ applied to the same specification will generate:
+#+begin_src go
+func floatTriple(n float) float {
+	fmt.Println(n)
+	return 3 * n
+}
+func intTriple(n int) int {
+	fmt.Println(n)
+	return 3 * n
+}
+#+end_src
+
+*** Alternatives
+
+Alternative values can be specified with semicolons in the association, like _=:var value1;value2=_, and the additional alternatives can be represented inside a specification with semicolon suffixes (=${var}= corresponds to the first value, =${var;}= to the second, =${var;;}= to the third, and so on).
+
+The goal is to provide additional flexibility to deal with the syntactic system of the target language.
+For example in the specification below, _=op=_ represents an operator and therefore cannot be used in the function name because something like _=float+Op=_ is not a valid Go function name.
+#+name: alternative-spec-example
+#+begin_src go
+func ${type}${op;;}Op(l, r ${type}) (${type}, string) {
+	return l ${op} r, "${op;}"
+}
+#+end_src
+
+Applying the association _=:op +;plus;Plus :type float int=_ will generate:
+#+begin_src go
+func floatPlusOp(l, r float) (float, string) {
+	return l + r, "plus"
+}
+func intPlusOp(l, r int) (int, string) {
+	return l + r, "plus"
+}
+#+end_src
+
+
+** Supporting library
+
+In this section are defined code blocks providing all the functionalities needed for the simple code generation system outlined in the previous section.
+The implementation is done in Python because I like it and find it well suited for the problem.
+
+*** Code block inclusion
+
+The inclusion is left to LitLib's =include.pl=:
+#+name: py-include
+#+begin_src python
+import subprocess
+def include(blocks):
+    command = ['./litlib/include.pl', 'go-harp.org', ':exit-with-error :noweb ' + blocks]
+    res = subprocess.run(command, capture_output=True)
+    if res.returncode == 0:
+        return res.stdout.decode('utf-8').strip()
+    raise RuntimeError(f'Include script failed to process `{blocks}`, errno {res.returncode}')
+#+end_src
+
+Usage:
+#+begin_src python :exports both :wrap src go
+<<py-include>>
+print(include('triple-spec'))
+#+end_src
+
+#+RESULTS:
+#+begin_src go
+func ${type}Triple(n ${type}) ${type} {
+	${fun}(n)
+	return 3 * n
+}
+#+end_src
+
+*** Substitute variables in a specification
+
+The very simple trick of splitting on =${=,
+the start delimiter and then splitting the splits on =}=, the end delimiter does all the heavy work.
+
+#+name: substitute_spec
+#+begin_src python
+def substitute_spec(spec, env):
+    spec = spec.split('${')
+    res_buffer = [spec[0]]
+    spec = [el.split('}', 1) for el in spec[1:]]
+    for variable, tail in spec:
+        assert variable in env, f'Missing {variable} in environment, cannot substitute.'
+        res_buffer.append(env[variable])
+        res_buffer.append(tail)
+    return ''.join(res_buffer)
+#+end_src
+
+Usage:
+#+begin_src python :exports both :wrap src go
+<<py-include>>
+<<substitute_spec>>
+print(substitute_spec(include('triple-spec'), {'type': 'float', 'fun': 'fmt.Println'}))
+#+end_src
+
+#+RESULTS:
+#+begin_src go
+func floatTriple(n float) float {
+	fmt.Println(n)
+	return 3 * n
+}
+#+end_src
+
+*** Convert association to Python =dict=
+
+Implementation:
+#+name: noweb_dict
+#+begin_src python
+def noweb_dict(noweb):
+    assert noweb[0] == ':', 'Noweb string should start with :'
+    groups = map(lambda x: x.strip().split(' '), noweb.split(':')[1:])
+    return {g[0]: g[1:] for g in groups}
+#+end_src
+
+Usage:
+#+begin_src python :exports both :wrap src python
+<<noweb_dict>>
+print(noweb_dict(":op +;plus;Plus :type float int"))
+#+end_src
+
+#+RESULTS:
+#+begin_src python
+{'op': ['+;plus;Plus'], 'type': ['float', 'int']}
+#+end_src
+
+Note that the alternatives are not expanded here, =+;plus;Plus= stays whole.
+
+*** Iterate on all combinations of values
+
+This is where the multiple values feature is implemented:
+#+name: values_product
+#+begin_src python :wrap src python
+from itertools import product
+def values_product(variables):
+    variables = [[(k, v) for v in l] for k, l in variables.items()]
+    for associations in product(*variables):
+        yield {k: v for k, v in associations}
+#+end_src
+
+Usage:
+#+begin_src python :wrap src python
+<<include("noweb_dict values_product")>>
+nd = noweb_dict(":op +;plus;Plus :type float int")
+print(list(values_product(nd)))
+#+end_src
+
+#+RESULTS:
+#+begin_src python
+[{'op': '+;plus;Plus', 'type': 'float'}, {'op': '+;plus;Plus', 'type': 'int'}]
+#+end_src
+
+*** Expand alternatives
+
+Alternative expansion must happen after combination of values because it expects a dict of strings, not a dict of lists of strings.
+
+#+name: expand_alternatives
+#+begin_src python
+def expand_alternatives(variables):
+    update = dict()
+    for k, v in variables.items():
+        alternatives = v.split(';')
+        for i, alt in enumerate(alternatives):
+            update[k + ';' * i] = alt
+    variables.update(update)
+    return variables
+#+end_src
+Note that this modifies =variables=, this is the expected semantic.
+
+Usage:
+#+begin_src python :exports both :wrap src python
+<<include("noweb_dict values_product expand_alternatives")>>
+from pprint import pprint
+nd = noweb_dict(":op +;plus;Plus :type float int")
+pprint(list(map(expand_alternatives, values_product(nd))))
+#+end_src
+
+#+RESULTS:
+#+begin_src python
+[{'op': '+', 'op;': 'plus', 'op;;': 'Plus', 'type': 'float'},
+ {'op': '+', 'op;': 'plus', 'op;;': 'Plus', 'type': 'int'}]
+#+end_src
+
+
+** Callable code block
+
+*** Noweb parameter parsing
+
+Before properly implementing code generation, here is a small helper to handle positional arguments in a noweb string:
+#+name: params
+#+begin_src python
+def params(noweb):
+    kwstart = noweb.find(' :')
+    args = noweb[:kwstart].strip().split()
+    if kwstart == -1:
+        return args, None
+    return args, noweb_dict(noweb[kwstart + 1:])
+#+end_src
+#+depends:params :noweb noweb_dict
+
+Usage:
+#+begin_src python :wrap src python
+<<include("params")>>
+(a, b), kw = params('positional arguments :kwargs :type int string :op +;plus')
+print(a)
+print(b)
+print(kw)
+#+end_src
+
+#+RESULTS:
+#+begin_src python
+positional
+arguments
+{'kwargs': [], 'type': ['int', 'string'], 'op': ['+;plus']}
+#+end_src
+
+Arguably this could go in the supporting library but since it is directly tied to parsing the arguments passed to the =specgen= code block, I prefer to put it here.
+
+*** =specgen=
+
+Below is the final code block implementing code generation.
+All the arguments are transmitted via its one =noweb= variable.
+It expects three positional arguments:
+ - =spec=, the name of the specification code block.
+ - =name=, the name of the generated code block.
+ - =lang=, the language of the generated code block.
+
+#+name: specgen
+#+begin_src python :var noweb="" :exports both
+<<include("params py-include values_product expand_alternatives substitute_spec")>>
+(spec, name, lang), variables = params(noweb)
+spec_content = include(spec)
+
+print(f'#+name: {name}')
+print(f'#+begin_src {lang}')
+for associations in map(expand_alternatives, values_product(variables)):
+    print(substitute_spec(spec_content, associations))
+print('#+end_src')
+#+end_src
+
+Usage:
+#+Call: specgen("alternative-spec-example specgen-ex go :op +;plus;Plus -;minus;Minus :type float int")
+
+#+RESULTS:
+:results:
+#+name: specgen-ex
+#+begin_src go
+func floatPlusOp(l, r float) (float, string) {
+	return l + r, "plus"
+}
+func intPlusOp(l, r int) (int, string) {
+	return l + r, "plus"
+}
+func floatMinusOp(l, r float) (float, string) {
+	return l - r, "minus"
+}
+func intMinusOp(l, r int) (int, string) {
+	return l - r, "minus"
+}
+#+end_src
+:end:
