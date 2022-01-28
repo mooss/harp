@@ -4,6 +4,16 @@
 #+property: header-args :noweb yes :results output
 #+property: header-args:go+ :main no :eval no
 
+* License :noexport:
+
+This file is part of Harp.
+
+Harp is free software: you can redistribute it and/or modify it under the terms of the version 3 of the GNU General Public License as published by the Free Software Foundation.
+
+Harp is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with Harp. If not, see <https://www.gnu.org/licenses/>.
+
 * Prelude
 
 ** References
