@@ -1129,21 +1129,28 @@ It expects three positional arguments:
 <<include("params py-include values_product expand_alternatives substitute_spec")>>
 (spec, name, lang), variables = params(noweb)
 spec_content = include(spec)
+if 'exports' in variables:
+    export = ':exports ' + ' '.join(variables.pop('exports'))
+else:
+    export = ':exports none'
 
 print(f'#+name: {name}')
-print(f'#+begin_src {lang}')
+print(f'#+begin_src {lang} {export}')
 for associations in map(expand_alternatives, values_product(variables)):
     print(substitute_spec(spec_content, associations))
 print('#+end_src')
 #+end_src
 
+By default the generated code is not exported because it tends to be very verbose and not informative.
+The caller can pass =:exports code= to export the generated code in the document.
+
 Usage:
-#+Call: specgen("alternative-spec-example specgen-ex go :op +;plus;Plus -;minus;Minus :type float int")
+#+Call: specgen("alternative-spec-example specgen-ex go :op +;plus;Plus -;minus;Minus :type float int :exports code")
 
 #+RESULTS:
 :results:
 #+name: specgen-ex
-#+begin_src go
+#+begin_src go :exports code
 func floatPlusOp(l, r float) (float, string) {
 	return l + r, "plus"
 }
